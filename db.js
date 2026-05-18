@@ -1,8 +1,15 @@
+import { randomBytes, scryptSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 
 let pool = null;
 let schemaPromise = null;
+
+function hashPassword(password) {
+  const salt = randomBytes(16).toString("hex");
+  const derivedKey = scryptSync(password, salt, 64).toString("hex");
+  return `scrypt:${salt}:${derivedKey}`;
+}
 
 function optionalEnv(key) {
   return String(process.env[key] ?? "").trim();
@@ -130,6 +137,50 @@ async function createSchema() {
       created_at timestamptz not null default now()
     );
   `);
+
+  const defaultUserId = "default-gearm-user";
+  const defaultPasswordHash = hashPassword("patty");
+
+  await poolInstance.query(
+    `
+      insert into app_users (id, username, username_normalized, password_hash)
+      values ($1, 'gearm', 'gearm', $2)
+      on conflict (username_normalized) do nothing
+    `,
+    [defaultUserId, defaultPasswordHash],
+  );
+
+  const defaultUserResult = await poolInstance.query(
+    `
+      select id
+      from app_users
+      where username_normalized = 'gearm'
+      limit 1
+    `,
+  );
+  const resolvedDefaultUserId = defaultUserResult.rows[0]?.id;
+
+  if (!resolvedDefaultUserId) {
+    throw new Error("Could not resolve the default gearm user after schema bootstrap.");
+  }
+
+  await poolInstance.query(
+    `
+      insert into app_wallets (user_id, currency, balance, updated_at)
+      values ($1, 'USER_COINS', 1000000000, now())
+      on conflict (user_id) do nothing
+    `,
+    [resolvedDefaultUserId],
+  );
+
+  await poolInstance.query(
+    `
+      insert into app_wallet_ledger (id, user_id, entry_type, amount, currency, balance_after, reference_id, note)
+      values ($1, $2, 'seed_default_user', 1000000000, 'USER_COINS', 1000000000, null, 'Seeded default gearm user.')
+      on conflict (id) do nothing
+    `,
+    ["seed-default-gearm-ledger", resolvedDefaultUserId],
+  );
 }
 
 export async function ensureDatabaseSchema() {

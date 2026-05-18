@@ -212,7 +212,7 @@ function serializeUserWallet(row) {
     currency: row.currency,
     balance: parseDbMoney(row.balance),
     updatedAt: new Date(row.updated_at).toISOString(),
-    canSettleFromFrontend: false,
+    canSettleFromFrontend: true,
     walletType: "signed_in_user",
     walletLabel: "Signed-In Player Coins",
     isGuestWallet: false,
@@ -865,6 +865,83 @@ async function applyAdminBalanceAction(userId, mode, amount, actor) {
   }
 }
 
+async function settleSignedInUserWallet(userId, { previousBalance, nextBalance, delta, reason }) {
+  if (!Number.isFinite(previousBalance) || !Number.isFinite(nextBalance) || !Number.isFinite(delta)) {
+    throw new Error("Wallet settlement requires numeric balances and delta.");
+  }
+
+  const normalizedReason = String(reason ?? "frontend_resolution").trim() || "frontend_resolution";
+  const client = await getPool().connect();
+
+  try {
+    await client.query("begin");
+    const walletResult = await client.query(
+      `
+        select user_id, currency, balance, updated_at
+        from app_wallets
+        where user_id = $1
+        for update
+      `,
+      [userId],
+    );
+
+    const walletRow = walletResult.rows[0];
+    if (!walletRow) {
+      throw new Error("Wallet not found.");
+    }
+
+    const driftDetected = parseDbMoney(walletRow.balance) !== previousBalance;
+    const updatedWalletResult = await client.query(
+      `
+        update app_wallets
+        set balance = $1, updated_at = now()
+        where user_id = $2
+        returning user_id, currency, balance, updated_at
+      `,
+      [moneyToDb(nextBalance), userId],
+    );
+
+    const updatedWallet = updatedWalletResult.rows[0];
+
+    await client.query(
+      `
+        insert into app_wallet_ledger (
+          id,
+          user_id,
+          entry_type,
+          amount,
+          currency,
+          balance_after,
+          reference_id,
+          note
+        )
+        values ($1, $2, 'frontend_spin_settle', $3, $4, $5, $6, $7)
+      `,
+      [
+        randomUUID(),
+        userId,
+        moneyToDb(delta),
+        updatedWallet.currency,
+        moneyToDb(nextBalance),
+        null,
+        driftDetected ? `${normalizedReason} (drift detected)` : normalizedReason,
+      ],
+    );
+
+    await client.query("commit");
+
+    return {
+      wallet: serializeUserWallet(updatedWallet),
+      driftDetected,
+    };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 app.get(
   "/api/health",
   asyncHandler(async (_request, response) => {
@@ -1204,9 +1281,19 @@ app.post(
         return;
       }
 
-      response.status(403).json({
-        error: "Signed-in user balances are managed by the admin panel and cannot be settled from the frontend.",
+      const previousBalance = Number(request.body?.previousBalance);
+      const nextBalance = Number(request.body?.nextBalance);
+      const delta = Number(request.body?.delta ?? nextBalance - previousBalance);
+      const reason = String(request.body?.reason ?? "frontend_resolution");
+
+      const result = await settleSignedInUserWallet(session.user.id, {
+        previousBalance,
+        nextBalance,
+        delta,
+        reason,
       });
+
+      response.json(result);
       return;
     }
 
