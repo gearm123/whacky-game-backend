@@ -1,14 +1,14 @@
 # Whacky Slot Account Service
 
-Node backend for guest coin play plus a new Postgres-backed user wallet flow for signed-in players.
+Node backend for guest coin play plus a Postgres-backed username/password system for signed-in players.
 
 ## What It Does
 
 - keeps the guest refill request flow for `2000` starting coins
 - adds simple username/password sign-up and sign-in
-- stores users, sessions, wallets, deposits, and ledger entries in Postgres
-- gives signed-in users a manual TrueMoney deposit flow
-- adds an admin page to approve or reject manual deposit requests
+- stores users, sessions, signed-in wallets, and ledger entries in Postgres
+- keeps signed-in user balances separate from guest demo coins
+- adds an admin page to add coins or set an exact signed-in user balance
 
 ## Guest Flow
 
@@ -22,23 +22,20 @@ Guest refill requests are still in memory and reset when the backend restarts.
 ## Signed-In User Flow
 
 - signed-in users register with `username` and `password`
-- each new signed-in user gets a THB wallet with `0.00` balance
-- the frontend can fetch deposit instructions from `GET /api/deposit-instructions`
-- the frontend creates a pending deposit request with `POST /api/deposits`
-- after the real transfer is received in your TrueMoney receiving account, approve it in `http://localhost:3001/admin/deposits`
-- approval credits the signed-in user's THB wallet and writes a ledger entry
+- each new signed-in user gets a `USER_COINS` wallet with `0.00` balance
+- signed-in balances are stored in Postgres
+- signed-in balances can only be changed from the admin panel
+- open `http://localhost:3001/admin/users` to add coins or set a user's exact balance
+- every admin change writes a ledger entry for that user
 
-`POST /api/wallet/settle` now only works for guests. Signed-in THB balances are intentionally controlled by backend-approved deposit actions.
+`POST /api/wallet/settle` now only works for guests. Signed-in balances are intentionally controlled by the admin panel.
 
 ## Environment
 
 Copy `.env.example` and set:
 
 - `DATABASE_URL` for Postgres
-- `ADMIN_USERNAME` and `ADMIN_PASSWORD` for the deposit admin page
-- `TRUEMONEY_RECIPIENT_NAME`
-- `TRUEMONEY_RECIPIENT_ACCOUNT`
-- optional `TRUEMONEY_RECIPIENT_NOTE`
+- `ADMIN_USERNAME` and `ADMIN_PASSWORD` for the admin pages
 
 The backend auto-creates the required Postgres tables on startup.
 
@@ -50,9 +47,6 @@ The backend auto-creates the required Postgres tables on startup.
 - `POST /api/auth/signout`
 - `GET /api/me`
 - `GET /api/wallet`
-- `GET /api/deposit-instructions`
-- `GET /api/deposits`
-- `POST /api/deposits`
 - `POST /api/refill-requests`
 - `GET /api/refill-requests/:requestId?guestId=...`
 - `POST /api/refill-requests/:requestId/claim`

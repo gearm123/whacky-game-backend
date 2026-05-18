@@ -49,7 +49,7 @@ export function getDatabaseUrl() {
   const raw = rawDatabaseUrlFromEnvironment();
   if (!raw) {
     throw new Error(
-      "DATABASE_URL is not set. Configure DATABASE_URL, POSTGRES_URL, or DATABASE_URL_FILE to enable Postgres-backed auth and wallet storage.",
+      "DATABASE_URL is not set. Configure DATABASE_URL, POSTGRES_URL, or DATABASE_URL_FILE to enable Postgres-backed auth and signed-in user balances.",
     );
   }
   return normalizeDatabaseUrl(raw);
@@ -128,27 +128,6 @@ async function createSchema() {
       reference_id text,
       note text,
       created_at timestamptz not null default now()
-    );
-  `);
-
-  await poolInstance.query(`
-    create table if not exists deposit_requests (
-      id text primary key,
-      user_id text not null references app_users(id) on delete cascade,
-      amount numeric(14, 2) not null,
-      currency text not null,
-      status text not null,
-      sender_wallet_id text,
-      transfer_reference text,
-      note text,
-      destination_label text not null,
-      destination_account text not null,
-      created_at timestamptz not null default now(),
-      updated_at timestamptz not null default now(),
-      approved_at timestamptz,
-      rejected_at timestamptz,
-      approved_by text,
-      rejected_by text
     );
   `);
 }

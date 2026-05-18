@@ -11,17 +11,19 @@ const port = Number(process.env.PORT) || 3001;
 const REFILL_AMOUNT = 2000;
 const GUEST_STARTING_BALANCE = 2000;
 const SESSION_DAYS = Math.max(1, Number(process.env.AUTH_SESSION_DAYS) || 30);
+const USER_WALLET_CURRENCY = "USER_COINS";
+const GUEST_WALLET_CURRENCY = "GUEST_COINS";
 
 const guestUser = {
   id: "guest-user",
   username: "guest-player",
   displayName: "Guest Player",
-  billingProfile: "guest-coins",
+  billingProfile: "guest-demo-coins",
 };
 
 const guestWallet = {
   userId: guestUser.id,
-  currency: "COINS",
+  currency: GUEST_WALLET_CURRENCY,
   balance: GUEST_STARTING_BALANCE,
   version: 1,
   updatedAt: new Date().toISOString(),
@@ -69,37 +71,6 @@ function createId(prefix) {
   return `${prefix}-${Date.now()}-${randomBytes(4).toString("hex")}`;
 }
 
-function getTrueMoneyRecipient() {
-  const label = (process.env.TRUEMONEY_RECIPIENT_NAME || "TrueMoney receiving account").trim();
-  const account = (process.env.TRUEMONEY_RECIPIENT_ACCOUNT || "TO_BE_CONFIGURED").trim();
-  const note = (
-    process.env.TRUEMONEY_RECIPIENT_NOTE ||
-    "Set TRUEMONEY_RECIPIENT_ACCOUNT before accepting live deposits."
-  ).trim();
-
-  return {
-    label,
-    account,
-    note,
-    configured: account !== "TO_BE_CONFIGURED",
-  };
-}
-
-function getDepositInstructions() {
-  const recipient = getTrueMoneyRecipient();
-
-  return {
-    ...recipient,
-    currency: "THB",
-    steps: [
-      "Create a deposit request from the signed-in account.",
-      `Transfer the exact requested THB amount to ${recipient.label}.`,
-      "After the transfer is received, an admin approves the request from the backend admin panel.",
-      "Approved requests add THB balance to the signed-in site wallet.",
-    ],
-  };
-}
-
 function getAdminCredentials() {
   return {
     username: (process.env.ADMIN_USERNAME || "").trim(),
@@ -145,30 +116,30 @@ function parseGuestId(value) {
   return guestId;
 }
 
-function parseDepositAmount(value) {
+function parsePositiveCoins(value, fieldName = "amount") {
   const amount = Number(value);
   if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error("Deposit amount must be a positive number.");
+    throw new Error(`${fieldName} must be a positive number.`);
   }
 
-  if (amount > 1_000_000) {
-    throw new Error("Deposit amount is too large.");
+  if (amount > 1_000_000_000) {
+    throw new Error(`${fieldName} is too large.`);
   }
 
   return Number(amount.toFixed(2));
 }
 
-function parseOptionalText(value, maxLength = 160) {
-  const text = String(value ?? "").trim();
-  if (!text) {
-    return null;
+function parseNonNegativeCoins(value, fieldName = "amount") {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw new Error(`${fieldName} must be zero or greater.`);
   }
 
-  if (text.length > maxLength) {
-    throw new Error(`Text field must be at most ${maxLength} characters.`);
+  if (amount > 1_000_000_000) {
+    throw new Error(`${fieldName} is too large.`);
   }
 
-  return text;
+  return Number(amount.toFixed(2));
 }
 
 function hashPassword(password) {
@@ -229,6 +200,9 @@ function serializeGuestWallet() {
     version: guestWallet.version,
     updatedAt: guestWallet.updatedAt,
     canSettleFromFrontend: true,
+    walletType: "guest_demo",
+    walletLabel: "Guest Demo Coins",
+    isGuestWallet: true,
   };
 }
 
@@ -239,6 +213,9 @@ function serializeUserWallet(row) {
     balance: parseDbMoney(row.balance),
     updatedAt: new Date(row.updated_at).toISOString(),
     canSettleFromFrontend: false,
+    walletType: "signed_in_user",
+    walletLabel: "Signed-In Player Coins",
+    isGuestWallet: false,
   };
 }
 
@@ -252,28 +229,6 @@ function serializeLedgerEntry(row) {
     referenceId: row.reference_id,
     note: row.note,
     createdAt: new Date(row.created_at).toISOString(),
-  };
-}
-
-function serializeDeposit(row) {
-  return {
-    id: row.id,
-    userId: row.user_id,
-    username: row.username,
-    amount: parseDbMoney(row.amount),
-    currency: row.currency,
-    status: row.status,
-    senderWalletId: row.sender_wallet_id,
-    transferReference: row.transfer_reference,
-    note: row.note,
-    destinationLabel: row.destination_label,
-    destinationAccount: row.destination_account,
-    createdAt: new Date(row.created_at).toISOString(),
-    updatedAt: new Date(row.updated_at).toISOString(),
-    approvedAt: row.approved_at ? new Date(row.approved_at).toISOString() : null,
-    rejectedAt: row.rejected_at ? new Date(row.rejected_at).toISOString() : null,
-    approvedBy: row.approved_by,
-    rejectedBy: row.rejected_by,
   };
 }
 
@@ -354,7 +309,7 @@ function renderAdminShell(title, intro, content, extraNotice = "") {
             margin-bottom: 20px;
           }
           .card {
-            min-width: 140px;
+            min-width: 160px;
             padding: 14px 16px;
             border-radius: 16px;
             background: rgba(255, 255, 255, 0.06);
@@ -395,8 +350,20 @@ function renderAdminShell(title, intro, content, extraNotice = "") {
             flex-wrap: wrap;
             gap: 8px;
           }
+          .stack {
+            display: grid;
+            gap: 8px;
+          }
           form {
             margin: 0;
+          }
+          input {
+            width: 140px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 10px;
+            padding: 10px 12px;
+            background: rgba(255, 255, 255, 0.06);
+            color: inherit;
           }
           button {
             cursor: pointer;
@@ -407,6 +374,10 @@ function renderAdminShell(title, intro, content, extraNotice = "") {
           }
           .approve {
             background: #6be49a;
+            color: #10223a;
+          }
+          .secondary {
+            background: #8dc9ff;
             color: #10223a;
           }
           .reject {
@@ -420,7 +391,7 @@ function renderAdminShell(title, intro, content, extraNotice = "") {
       </head>
       <body>
         <nav>
-          <a href="/admin/deposits">Manual deposits</a>
+          <a href="/admin/users">Signed-in user balances</a>
           <a href="/admin/refill-requests">Guest refill requests</a>
         </nav>
         <h1>${escapeHtml(title)}</h1>
@@ -478,6 +449,7 @@ function renderRefillRequestsAdminPage() {
       <div class="card"><strong>Pending</strong><br />${pendingCount}</div>
       <div class="card"><strong>Approved</strong><br />${approvedCount}</div>
       <div class="card"><strong>Claimed</strong><br />${claimedCount}</div>
+      <div class="card"><strong>Wallet Type</strong><br />Guest Demo Coins</div>
     </div>
     <table>
       <thead>
@@ -498,33 +470,13 @@ function renderRefillRequestsAdminPage() {
 
   return renderAdminShell(
     "Guest refill requests",
-    `Open this page to approve a pending guest request. Approved requests add ${REFILL_AMOUNT} coins after the guest browser polls and claims the refill.`,
+    `Guest demo coins stay separate from signed-in user balances. Approved guest refills add ${REFILL_AMOUNT} guest demo coins after the browser claims the request.`,
     content,
   );
 }
 
-function renderDepositActionButtons(requestRecord) {
-  if (requestRecord.status !== "pending") {
-    return '<span class="muted">No actions</span>';
-  }
-
-  return `
-    <div class="actions">
-      <form method="post" action="/admin/deposits/${encodeURIComponent(requestRecord.id)}/approve">
-        <button type="submit" class="approve">Approve +${formatMoney(requestRecord.amount)} ${escapeHtml(requestRecord.currency)}</button>
-      </form>
-      <form method="post" action="/admin/deposits/${encodeURIComponent(requestRecord.id)}/reject">
-        <button type="submit" class="reject">Reject</button>
-      </form>
-    </div>
-  `;
-}
-
-function renderDepositsAdminPage(rows) {
-  const pendingCount = rows.filter((entry) => entry.status === "pending").length;
-  const approvedCount = rows.filter((entry) => entry.status === "approved").length;
-  const rejectedCount = rows.filter((entry) => entry.status === "rejected").length;
-  const recipient = getTrueMoneyRecipient();
+function renderUserWalletAdminPage(rows) {
+  const totalBalance = rows.reduce((sum, entry) => sum + parseDbMoney(entry.balance), 0);
   const notice = isAdminAuthConfigured()
     ? ""
     : '<div class="notice">Admin credentials are not configured. Set ADMIN_USERNAME and ADMIN_PASSWORD before exposing this page outside local development.</div>';
@@ -534,43 +486,43 @@ function renderDepositsAdminPage(rows) {
         .map(
           (entry) => `
             <tr>
-              <td><code>${escapeHtml(entry.id)}</code></td>
               <td>${escapeHtml(entry.username)}</td>
-              <td>${formatMoney(entry.amount)} ${escapeHtml(entry.currency)}</td>
-              <td>${escapeHtml(entry.status)}</td>
-              <td><code>${escapeHtml(entry.transfer_reference ?? "-")}</code></td>
-              <td><code>${escapeHtml(entry.sender_wallet_id ?? "-")}</code></td>
-              <td>${escapeHtml(entry.created_at)}</td>
-              <td>${escapeHtml(entry.approved_at ?? "-")}</td>
-              <td>${renderDepositActionButtons({
-                ...entry,
-                amount: parseDbMoney(entry.amount),
-              })}</td>
+              <td>${formatMoney(entry.balance)} ${escapeHtml(entry.currency)}</td>
+              <td>${escapeHtml(new Date(entry.updated_at).toISOString())}</td>
+              <td>${escapeHtml(new Date(entry.created_at).toISOString())}</td>
+              <td>
+                <div class="stack">
+                  <form class="actions" method="post" action="/admin/users/${encodeURIComponent(entry.user_id)}/add-coins">
+                    <input type="number" min="0.01" step="0.01" name="amount" placeholder="Add coins" required />
+                    <button type="submit" class="approve">Add Coins</button>
+                  </form>
+                  <form class="actions" method="post" action="/admin/users/${encodeURIComponent(entry.user_id)}/set-balance">
+                    <input type="number" min="0" step="0.01" name="amount" placeholder="Set balance" required />
+                    <button type="submit" class="secondary">Set Balance</button>
+                  </form>
+                </div>
+              </td>
             </tr>
           `,
         )
         .join("")
-    : '<tr><td colspan="9" class="muted">No deposit requests yet.</td></tr>';
+    : '<tr><td colspan="5" class="muted">No signed-in users yet.</td></tr>';
 
   const content = `
     <div class="summary">
-      <div class="card"><strong>Pending</strong><br />${pendingCount}</div>
-      <div class="card"><strong>Approved</strong><br />${approvedCount}</div>
-      <div class="card"><strong>Rejected</strong><br />${rejectedCount}</div>
-      <div class="card"><strong>Recipient</strong><br /><code>${escapeHtml(recipient.account)}</code></div>
+      <div class="card"><strong>Signed-In Users</strong><br />${rows.length}</div>
+      <div class="card"><strong>Total User Coins</strong><br />${formatMoney(totalBalance)}</div>
+      <div class="card"><strong>Wallet Type</strong><br />Signed-In Player Coins</div>
+      <div class="card"><strong>Guest Coins</strong><br />Managed separately</div>
     </div>
     <table>
       <thead>
         <tr>
-          <th>Request</th>
-          <th>User</th>
-          <th>Transfer amount</th>
-          <th>Status</th>
-          <th>Reference</th>
-          <th>Sender wallet</th>
+          <th>Username</th>
+          <th>Current Balance</th>
+          <th>Updated</th>
           <th>Created</th>
-          <th>Approved</th>
-          <th>Actions</th>
+          <th>Admin Actions</th>
         </tr>
       </thead>
       <tbody>${requestRows}</tbody>
@@ -578,8 +530,8 @@ function renderDepositsAdminPage(rows) {
   `;
 
   return renderAdminShell(
-    "Manual deposit approvals",
-    "Review pending TrueMoney transfer requests and approve balance only after the receiving wallet confirms the transfer happened.",
+    "Signed-in user balances",
+    "Choose a signed-in username from the database and either add more coins or set an exact balance. These balances are separate from guest demo coins.",
     content,
     notice,
   );
@@ -621,7 +573,7 @@ function asyncHandler(handler) {
 async function ensureDatabaseAccess(response) {
   if (!isDatabaseUrlConfigured()) {
     response.status(503).json({
-      error: "Database is not configured yet. Set DATABASE_URL to enable sign-in and manual deposit storage.",
+      error: "Database is not configured yet. Set DATABASE_URL to enable sign-in and persistent signed-in user balances.",
     });
     return false;
   }
@@ -676,7 +628,7 @@ async function loadSessionByToken(token) {
       username: row.username,
       displayName: row.username,
       createdAt: new Date(row.user_created_at).toISOString(),
-      billingProfile: "manual-truemoney-deposits",
+      billingProfile: "signed-in-player-coins",
     },
     wallet: serializeUserWallet(row),
   };
@@ -721,9 +673,9 @@ async function createUserAccount(usernameValue, passwordValue) {
     await client.query(
       `
         insert into app_wallets (user_id, currency, balance, updated_at)
-        values ($1, 'THB', 0, now())
+        values ($1, $2, 0, now())
       `,
-      [userId],
+      [userId, USER_WALLET_CURRENCY],
     );
     await client.query("commit");
   } catch (error) {
@@ -740,7 +692,7 @@ async function createUserAccount(usernameValue, passwordValue) {
     id: userId,
     username,
     displayName: username,
-    billingProfile: "manual-truemoney-deposits",
+    billingProfile: "signed-in-player-coins",
   };
 }
 
@@ -766,7 +718,7 @@ async function verifyUserCredentials(usernameValue, passwordValue) {
     id: row.id,
     username: row.username,
     displayName: row.username,
-    billingProfile: "manual-truemoney-deposits",
+    billingProfile: "signed-in-player-coins",
   };
 }
 
@@ -824,100 +776,26 @@ async function listLedgerForUser(userId) {
   return result.rows.map(serializeLedgerEntry);
 }
 
-async function listDepositsForUser(userId) {
+async function listAllUsersWithWallets() {
   const result = await getPool().query(
     `
       select
-        d.*,
-        u.username
-      from deposit_requests d
-      join app_users u on u.id = d.user_id
-      where d.user_id = $1
-      order by d.created_at desc
-    `,
-    [userId],
-  );
-
-  return result.rows.map(serializeDeposit);
-}
-
-async function listAllDeposits() {
-  const result = await getPool().query(
-    `
-      select
-        d.*,
-        u.username
-      from deposit_requests d
-      join app_users u on u.id = d.user_id
-      order by d.created_at desc
-      limit 200
+        w.user_id,
+        u.username,
+        u.created_at,
+        w.currency,
+        w.balance,
+        w.updated_at
+      from app_wallets w
+      join app_users u on u.id = w.user_id
+      order by lower(u.username) asc
     `,
   );
 
   return result.rows;
 }
 
-async function createDepositRequest(userId, body) {
-  const amount = parseDepositAmount(body?.amount);
-  const senderWalletId = parseOptionalText(body?.senderWalletId, 120);
-  const transferReference = parseOptionalText(body?.transferReference, 120);
-  const note = parseOptionalText(body?.note, 240);
-  const recipient = getTrueMoneyRecipient();
-  const depositId = createId("deposit");
-
-  const result = await getPool().query(
-    `
-      insert into deposit_requests (
-        id,
-        user_id,
-        amount,
-        currency,
-        status,
-        sender_wallet_id,
-        transfer_reference,
-        note,
-        destination_label,
-        destination_account
-      )
-      values ($1, $2, $3, 'THB', 'pending', $4, $5, $6, $7, $8)
-      returning
-        id,
-        user_id,
-        amount,
-        currency,
-        status,
-        sender_wallet_id,
-        transfer_reference,
-        note,
-        destination_label,
-        destination_account,
-        created_at,
-        updated_at,
-        approved_at,
-        rejected_at,
-        approved_by,
-        rejected_by
-    `,
-    [depositId, userId, moneyToDb(amount), senderWalletId, transferReference, note, recipient.label, recipient.account],
-  );
-
-  const userResult = await getPool().query(
-    `
-      select username
-      from app_users
-      where id = $1
-      limit 1
-    `,
-    [userId],
-  );
-
-  return serializeDeposit({
-    ...result.rows[0],
-    username: userResult.rows[0]?.username ?? "unknown",
-  });
-}
-
-async function approveDepositRequest(depositId, actor) {
+async function applyAdminBalanceAction(userId, mode, amount, actor) {
   const client = await getPool().connect();
 
   try {
@@ -925,28 +803,32 @@ async function approveDepositRequest(depositId, actor) {
     const result = await client.query(
       `
         select
-          d.*,
+          w.user_id,
           u.username,
-          w.balance as wallet_balance
-        from deposit_requests d
-        join app_users u on u.id = d.user_id
-        join app_wallets w on w.user_id = d.user_id
-        where d.id = $1
-        for update of d, w
+          w.currency,
+          w.balance,
+          w.updated_at
+        from app_wallets w
+        join app_users u on u.id = w.user_id
+        where w.user_id = $1
+        for update
       `,
-      [depositId],
+      [userId],
     );
 
     const row = result.rows[0];
     if (!row) {
-      throw new Error("Deposit request not found.");
+      throw new Error("User wallet not found.");
     }
 
-    if (row.status !== "pending") {
-      throw new Error(`Deposit request is already ${row.status}.`);
-    }
-
-    const nextBalance = parseDbMoney(row.wallet_balance) + parseDbMoney(row.amount);
+    const previousBalance = parseDbMoney(row.balance);
+    const nextBalance = mode === "add" ? previousBalance + amount : amount;
+    const delta = Number((nextBalance - previousBalance).toFixed(2));
+    const entryType = mode === "add" ? "admin_add_coins" : "admin_set_balance";
+    const note =
+      mode === "add"
+        ? `Admin ${actor} added ${formatMoney(amount)} signed-in player coins.`
+        : `Admin ${actor} set balance from ${formatMoney(previousBalance)} to ${formatMoney(nextBalance)}.`;
 
     await client.query(
       `
@@ -955,18 +837,6 @@ async function approveDepositRequest(depositId, actor) {
         where user_id = $2
       `,
       [moneyToDb(nextBalance), row.user_id],
-    );
-
-    await client.query(
-      `
-        update deposit_requests
-        set status = 'approved',
-            updated_at = now(),
-            approved_at = now(),
-            approved_by = $2
-        where id = $1
-      `,
-      [depositId, actor],
     );
 
     await client.query(
@@ -981,17 +851,9 @@ async function approveDepositRequest(depositId, actor) {
           reference_id,
           note
         )
-        values ($1, $2, 'manual_deposit_approved', $3, $4, $5, $6, $7)
+        values ($1, $2, $3, $4, $5, $6, $7, $8)
       `,
-      [
-        randomUUID(),
-        row.user_id,
-        moneyToDb(parseDbMoney(row.amount)),
-        row.currency,
-        moneyToDb(nextBalance),
-        row.id,
-        `Manual deposit approved by ${actor}`,
-      ],
+      [randomUUID(), row.user_id, entryType, moneyToDb(delta), row.currency, moneyToDb(nextBalance), null, note],
     );
 
     await client.query("commit");
@@ -1003,26 +865,6 @@ async function approveDepositRequest(depositId, actor) {
   }
 }
 
-async function rejectDepositRequest(depositId, actor) {
-  const result = await getPool().query(
-    `
-      update deposit_requests
-      set status = 'rejected',
-          updated_at = now(),
-          rejected_at = now(),
-          rejected_by = $2
-      where id = $1
-        and status = 'pending'
-      returning id
-    `,
-    [depositId, actor],
-  );
-
-  if (!result.rows[0]) {
-    throw new Error("Pending deposit request not found.");
-  }
-}
-
 app.get(
   "/api/health",
   asyncHandler(async (_request, response) => {
@@ -1031,7 +873,7 @@ app.get(
       databaseUrlConfigured: isDatabaseUrlConfigured(),
       databaseConnected: await pingDatabase(),
       guestWallet: serializeGuestWallet(),
-      trueMoneyRecipientConfigured: getTrueMoneyRecipient().configured,
+      signedInWalletCurrency: USER_WALLET_CURRENCY,
     });
   }),
 );
@@ -1052,7 +894,6 @@ app.post(
       expiresAt: session.expiresAt,
       user,
       wallet,
-      depositInstructions: getDepositInstructions(),
     });
   }),
 );
@@ -1073,7 +914,6 @@ app.post(
       expiresAt: session.expiresAt,
       user,
       wallet,
-      depositInstructions: getDepositInstructions(),
     });
   }),
 );
@@ -1110,7 +950,6 @@ app.get(
         isGuest: false,
         user: session.user,
         wallet: session.wallet,
-        depositInstructions: getDepositInstructions(),
       });
       return;
     }
@@ -1143,51 +982,6 @@ app.get(
     response.json({
       ...serializeGuestWallet(),
       recentLedger: [...guestLedger].reverse(),
-    });
-  }),
-);
-
-app.get(
-  "/api/deposit-instructions",
-  asyncHandler(async (request, response) => {
-    const session = await requireUserSession(request, response);
-    if (!session) {
-      return;
-    }
-
-    response.json({
-      user: session.user,
-      instructions: getDepositInstructions(),
-    });
-  }),
-);
-
-app.get(
-  "/api/deposits",
-  asyncHandler(async (request, response) => {
-    const session = await requireUserSession(request, response);
-    if (!session) {
-      return;
-    }
-
-    response.json({
-      deposits: await listDepositsForUser(session.user.id),
-    });
-  }),
-);
-
-app.post(
-  "/api/deposits",
-  asyncHandler(async (request, response) => {
-    const session = await requireUserSession(request, response);
-    if (!session) {
-      return;
-    }
-
-    const deposit = await createDepositRequest(session.user.id, request.body ?? {});
-    response.status(201).json({
-      deposit,
-      instructions: getDepositInstructions(),
     });
   }),
 );
@@ -1280,32 +1074,66 @@ app.post("/api/refill-requests/:requestId/claim", (request, response) => {
   }
 });
 
-app.get("/admin/refill-requests", (_request, response) => {
-  response.type("html").send(renderRefillRequestsAdminPage());
-});
+app.get(
+  "/admin",
+  asyncHandler(async (request, response) => {
+    const actor = requireAdmin(request, response);
+    if (!actor) {
+      return;
+    }
 
-app.post("/admin/refill-requests/:requestId/approve", (request, response) => {
-  const requestRecord = getRefillRequest(request.params.requestId);
-
-  if (requestRecord && requestRecord.status === "pending") {
-    updateRefillRequestStatus(requestRecord, "approved");
-  }
-
-  response.redirect("/admin/refill-requests");
-});
-
-app.post("/admin/refill-requests/:requestId/reject", (request, response) => {
-  const requestRecord = getRefillRequest(request.params.requestId);
-
-  if (requestRecord && requestRecord.status === "pending") {
-    updateRefillRequestStatus(requestRecord, "rejected");
-  }
-
-  response.redirect("/admin/refill-requests");
-});
+    response.redirect("/admin/users");
+  }),
+);
 
 app.get(
-  "/admin/deposits",
+  "/admin/refill-requests",
+  asyncHandler(async (request, response) => {
+    const actor = requireAdmin(request, response);
+    if (!actor) {
+      return;
+    }
+
+    response.type("html").send(renderRefillRequestsAdminPage());
+  }),
+);
+
+app.post(
+  "/admin/refill-requests/:requestId/approve",
+  asyncHandler(async (request, response) => {
+    const actor = requireAdmin(request, response);
+    if (!actor) {
+      return;
+    }
+
+    const requestRecord = getRefillRequest(request.params.requestId);
+    if (requestRecord && requestRecord.status === "pending") {
+      updateRefillRequestStatus(requestRecord, "approved");
+    }
+
+    response.redirect("/admin/refill-requests");
+  }),
+);
+
+app.post(
+  "/admin/refill-requests/:requestId/reject",
+  asyncHandler(async (request, response) => {
+    const actor = requireAdmin(request, response);
+    if (!actor) {
+      return;
+    }
+
+    const requestRecord = getRefillRequest(request.params.requestId);
+    if (requestRecord && requestRecord.status === "pending") {
+      updateRefillRequestStatus(requestRecord, "rejected");
+    }
+
+    response.redirect("/admin/refill-requests");
+  }),
+);
+
+app.get(
+  "/admin/users",
   asyncHandler(async (request, response) => {
     const actor = requireAdmin(request, response);
     if (!actor) {
@@ -1316,12 +1144,12 @@ app.get(
       return;
     }
 
-    response.type("html").send(renderDepositsAdminPage(await listAllDeposits()));
+    response.type("html").send(renderUserWalletAdminPage(await listAllUsersWithWallets()));
   }),
 );
 
 app.post(
-  "/admin/deposits/:depositId/approve",
+  "/admin/users/:userId/add-coins",
   asyncHandler(async (request, response) => {
     const actor = requireAdmin(request, response);
     if (!actor) {
@@ -1333,17 +1161,18 @@ app.post(
     }
 
     try {
-      await approveDepositRequest(request.params.depositId, actor);
+      const amount = parsePositiveCoins(request.body?.amount, "Add coins amount");
+      await applyAdminBalanceAction(request.params.userId, "add", amount, actor);
     } catch (error) {
-      console.error("Approve deposit failed:", error);
+      console.error("Admin add coins failed:", error);
     }
 
-    response.redirect("/admin/deposits");
+    response.redirect("/admin/users");
   }),
 );
 
 app.post(
-  "/admin/deposits/:depositId/reject",
+  "/admin/users/:userId/set-balance",
   asyncHandler(async (request, response) => {
     const actor = requireAdmin(request, response);
     if (!actor) {
@@ -1355,12 +1184,13 @@ app.post(
     }
 
     try {
-      await rejectDepositRequest(request.params.depositId, actor);
+      const amount = parseNonNegativeCoins(request.body?.amount, "Set balance amount");
+      await applyAdminBalanceAction(request.params.userId, "set", amount, actor);
     } catch (error) {
-      console.error("Reject deposit failed:", error);
+      console.error("Admin set balance failed:", error);
     }
 
-    response.redirect("/admin/deposits");
+    response.redirect("/admin/users");
   }),
 );
 
@@ -1375,7 +1205,7 @@ app.post(
       }
 
       response.status(403).json({
-        error: "Signed-in THB balances can only be changed by approved backend deposit actions.",
+        error: "Signed-in user balances are managed by the admin panel and cannot be settled from the frontend.",
       });
       return;
     }
