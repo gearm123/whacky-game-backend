@@ -308,12 +308,21 @@ function renderAdminShell(title, intro, content, extraNotice = "") {
             gap: 12px;
             margin-bottom: 20px;
           }
+          .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 20px;
+          }
           .card {
             min-width: 160px;
             padding: 14px 16px;
             border-radius: 16px;
             background: rgba(255, 255, 255, 0.06);
             border: 1px solid rgba(255, 255, 255, 0.08);
+          }
+          .wide-card {
+            flex: 1 1 280px;
           }
           .notice {
             margin-bottom: 16px;
@@ -365,12 +374,41 @@ function renderAdminShell(title, intro, content, extraNotice = "") {
             background: rgba(255, 255, 255, 0.06);
             color: inherit;
           }
+          .inline-field {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+          }
+          .inline-field input {
+            width: min(220px, 100%);
+            flex: 1 1 180px;
+          }
+          .readonly-input {
+            background: rgba(255, 255, 255, 0.04);
+          }
           button {
             cursor: pointer;
             border: 0;
             border-radius: 12px;
             padding: 10px 14px;
             font-weight: 700;
+          }
+          .icon-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 42px;
+            min-width: 42px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #eef4ff;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+          }
+          .icon-button svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
           }
           .approve {
             background: #6be49a;
@@ -387,6 +425,73 @@ function renderAdminShell(title, intro, content, extraNotice = "") {
           .muted {
             color: #abc0e5;
           }
+          .field-label {
+            display: block;
+            margin-bottom: 6px;
+            color: #abc0e5;
+            font-size: 0.82rem;
+            letter-spacing: 0.04em;
+          }
+          .modal-overlay {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(5, 10, 19, 0.78);
+            z-index: 20;
+          }
+          .modal-overlay.open {
+            display: flex;
+          }
+          .modal-panel {
+            width: min(860px, 100%);
+            max-height: min(80vh, 760px);
+            display: flex;
+            flex-direction: column;
+            background: #10223a;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 20px;
+            box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+          }
+          .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 16px;
+            padding: 20px 20px 12px;
+          }
+          .modal-copy {
+            padding: 0 20px 12px;
+          }
+          .modal-copy strong {
+            display: inline-block;
+            margin-right: 8px;
+          }
+          .scroll-frame {
+            overflow: auto;
+            padding: 0 20px 20px;
+          }
+          .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            padding: 0 20px 20px;
+          }
+          @media (max-width: 720px) {
+            body {
+              padding: 16px;
+            }
+            .modal-overlay {
+              padding: 12px;
+            }
+            .modal-panel {
+              max-height: calc(100vh - 24px);
+            }
+            .modal-header {
+              flex-direction: column;
+            }
+          }
         </style>
       </head>
       <body>
@@ -398,6 +503,58 @@ function renderAdminShell(title, intro, content, extraNotice = "") {
         <p class="muted">${escapeHtml(intro)}</p>
         ${extraNotice}
         ${content}
+        <script>
+          (() => {
+            const passwordInput = document.querySelector("[data-admin-password]");
+            const toggleButton = document.querySelector("[data-password-toggle]");
+            const popup = document.querySelector("[data-users-popup]");
+            const openButton = document.querySelector("[data-open-users-popup]");
+            const closeButtons = document.querySelectorAll("[data-close-users-popup]");
+
+            if (passwordInput && toggleButton) {
+              const updatePasswordToggle = () => {
+                const isVisible = passwordInput.type === "text";
+                toggleButton.setAttribute("aria-pressed", String(isVisible));
+                toggleButton.setAttribute("aria-label", isVisible ? "Hide admin password" : "Show admin password");
+                toggleButton.title = isVisible ? "Hide password" : "Show password";
+              };
+
+              updatePasswordToggle();
+              toggleButton.addEventListener("click", () => {
+                passwordInput.type = passwordInput.type === "password" ? "text" : "password";
+                updatePasswordToggle();
+              });
+            }
+
+            if (popup && openButton) {
+              const closePopup = () => {
+                popup.classList.remove("open");
+                popup.setAttribute("aria-hidden", "true");
+                document.body.style.overflow = "";
+              };
+              const openPopup = () => {
+                popup.classList.add("open");
+                popup.setAttribute("aria-hidden", "false");
+                document.body.style.overflow = "hidden";
+              };
+
+              openButton.addEventListener("click", openPopup);
+              closeButtons.forEach((button) => {
+                button.addEventListener("click", closePopup);
+              });
+              popup.addEventListener("click", (event) => {
+                if (event.target === popup) {
+                  closePopup();
+                }
+              });
+              document.addEventListener("keydown", (event) => {
+                if (event.key === "Escape" && popup.classList.contains("open")) {
+                  closePopup();
+                }
+              });
+            }
+          })();
+        </script>
       </body>
     </html>
   `;
@@ -477,6 +634,7 @@ function renderRefillRequestsAdminPage() {
 
 function renderUserWalletAdminPage(rows) {
   const totalBalance = rows.reduce((sum, entry) => sum + parseDbMoney(entry.balance), 0);
+  const admin = getAdminCredentials();
   const notice = isAdminAuthConfigured()
     ? ""
     : '<div class="notice">Admin credentials are not configured. Set ADMIN_USERNAME and ADMIN_PASSWORD before exposing this page outside local development.</div>';
@@ -508,12 +666,70 @@ function renderUserWalletAdminPage(rows) {
         .join("")
     : '<tr><td colspan="5" class="muted">No signed-in users yet.</td></tr>';
 
+  const popupRows = rows.length
+    ? rows
+        .map(
+          (entry) => `
+            <tr>
+              <td>${escapeHtml(entry.username)}</td>
+              <td><code>${escapeHtml(entry.user_id)}</code></td>
+              <td>${formatMoney(entry.balance)} ${escapeHtml(entry.currency)}</td>
+              <td>${escapeHtml(new Date(entry.created_at).toISOString())}</td>
+            </tr>
+          `,
+        )
+        .join("")
+    : '<tr><td colspan="4" class="muted">No signed-in users found in the database.</td></tr>';
+
   const content = `
     <div class="summary">
       <div class="card"><strong>Signed-In Users</strong><br />${rows.length}</div>
       <div class="card"><strong>Total User Coins</strong><br />${formatMoney(totalBalance)}</div>
       <div class="card"><strong>Wallet Type</strong><br />Signed-In Player Coins</div>
       <div class="card"><strong>Guest Coins</strong><br />Managed separately</div>
+    </div>
+    <div class="toolbar">
+      <div class="card wide-card">
+        <strong>Admin Access</strong><br />
+        <span class="muted">Basic auth credentials for this admin panel.</span>
+        <div class="stack" style="margin-top: 12px;">
+          <div>
+            <label class="field-label" for="admin-username-preview">Username</label>
+            <input
+              id="admin-username-preview"
+              class="readonly-input"
+              type="text"
+              value="${escapeHtml(admin.username || "Not configured")}"
+              readonly
+            />
+          </div>
+          <div>
+            <label class="field-label" for="admin-password-preview">Password</label>
+            <div class="inline-field">
+              <input
+                id="admin-password-preview"
+                data-admin-password
+                class="readonly-input"
+                type="password"
+                value="${escapeHtml(admin.password || "Not configured")}"
+                readonly
+              />
+              <button type="button" class="icon-button" data-password-toggle aria-label="Show admin password" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 5c5.23 0 9.27 3.24 11 7-1.73 3.76-5.77 7-11 7S2.73 15.76 1 12c1.73-3.76 5.77-7 11-7zm0 2C8.1 7 5.03 9.14 3.22 12 5.03 14.86 8.1 17 12 17s6.97-2.14 8.78-5C18.97 9.14 15.9 7 12 7zm0 2.25A2.75 2.75 0 1 1 9.25 12 2.75 2.75 0 0 1 12 9.25z"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card wide-card">
+        <strong>User Directory</strong><br />
+        <span class="muted">Open a scrollable popup with every signed-in user currently stored in Postgres.</span>
+        <div style="margin-top: 12px;">
+          <button type="button" class="secondary" data-open-users-popup>View All Users</button>
+        </div>
+      </div>
     </div>
     <table>
       <thead>
@@ -527,6 +743,36 @@ function renderUserWalletAdminPage(rows) {
       </thead>
       <tbody>${requestRows}</tbody>
     </table>
+    <div class="modal-overlay" data-users-popup aria-hidden="true">
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="users-popup-title">
+        <div class="modal-header">
+          <div>
+            <h2 id="users-popup-title" style="margin: 0;">All Signed-In Users</h2>
+            <p class="muted" style="margin: 8px 0 0;">Scrollable database snapshot for quick review without leaving the admin page.</p>
+          </div>
+          <button type="button" class="secondary" data-close-users-popup>Close</button>
+        </div>
+        <div class="modal-copy">
+          <strong>Total users:</strong> ${rows.length}
+        </div>
+        <div class="scroll-frame">
+          <table>
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>User ID</th>
+                <th>Balance</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>${popupRows}</tbody>
+          </table>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="secondary" data-close-users-popup>Close</button>
+        </div>
+      </div>
+    </div>
   `;
 
   return renderAdminShell(
